@@ -35,6 +35,14 @@ define Package/$(PKG_NAME)/config
 
 	config PACKAGE_ipset
 	default y if ! PACKAGE_firewall4
+
+	config PACKAGE_luci-app-openclash_include_core
+		bool "Include ClashMeta core in package"
+		default y
+		help
+		  Download and include the ClashMeta (mihomo) core binary
+		  during IPK compilation. If disabled, the core will be
+		  downloaded at runtime on the device.
 endef
 
 define Package/$(PKG_NAME)
@@ -86,7 +94,36 @@ endef
 define Build/Configure
 endef
 
+# Map OpenWrt ARCH to ClashMeta core platform name
+define GetClashArch
+$(strip $(if $(findstring x86_64,$(ARCH)),linux-amd64-v1,\
+  $(if $(findstring aarch64,$(ARCH)),linux-arm64,\
+    $(if $(findstring arm,$(ARCH)),linux-armv7,\
+      $(if $(findstring mips64,$(ARCH)),linux-mips64,\
+        $(if $(findstring mipsel,$(ARCH)),linux-mipsle-softfloat,\
+          $(if $(findstring mips,$(ARCH)),linux-mips-softfloat,\
+            $(if $(findstring i386,$(ARCH)),linux-386,\
+              $(if $(findstring loongarch64,$(ARCH)),linux-loong64,\
+0))))))))))
+endef
+
 define Build/Compile
+ifeq ($(CONFIG_PACKAGE_luci-app-openclash_include_core),y)
+	$(eval CLASH_ARCH:=$(call GetClashArch))
+	@if [ "$(CLASH_ARCH)" = "0" ]; then \
+		echo "WARNING: Unsupported architecture $(ARCH) for ClashMeta core, skipping core download"; \
+	else \
+		echo "Downloading ClashMeta core for $(CLASH_ARCH)..."; \
+		curl -SLk --connect-timeout 30 --retry 3 "https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-$(CLASH_ARCH).tar.gz" -o "$(PKG_BUILD_DIR)/clash_meta.tar.gz" || { echo "ERROR: Failed to download ClashMeta core"; exit 1; }; \
+		gzip -t "$(PKG_BUILD_DIR)/clash_meta.tar.gz" || { echo "ERROR: Downloaded ClashMeta core is corrupted"; exit 1; }; \
+		tar zxvfo "$(PKG_BUILD_DIR)/clash_meta.tar.gz" -C "$(PKG_BUILD_DIR)/root/etc/openclash/core/" || exit 1; \
+		mv "$(PKG_BUILD_DIR)/root/etc/openclash/core/clash" "$(PKG_BUILD_DIR)/root/etc/openclash/core/clash_meta" || exit 1; \
+		chmod 4755 "$(PKG_BUILD_DIR)/root/etc/openclash/core/clash_meta"; \
+		"$(PKG_BUILD_DIR)/root/etc/openclash/core/clash_meta" -v >/dev/null 2>&1 || { echo "ERROR: ClashMeta core binary is not executable"; exit 1; }; \
+		rm -f "$(PKG_BUILD_DIR)/clash_meta.tar.gz"; \
+		echo "ClashMeta core downloaded successfully for $(CLASH_ARCH)"; \
+	fi
+endif
 endef
 
 define Package/$(PKG_NAME)/conffiles
